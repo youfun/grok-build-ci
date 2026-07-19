@@ -1,0 +1,183 @@
+name: Build all platforms
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      source_repo:
+        description: "Source repository (owner/name)"
+        required: true
+        default: "xai-org/grok-build"
+      source_ref:
+        description: "Branch, tag, or commit SHA"
+        required: true
+        default: "main"
+
+concurrency:
+  group: build-all-${{ github.workflow }}-${{ github.event.inputs.source_repo || 'xai-org/grok-build' }}-${{ github.event.inputs.source_ref || 'main' }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.artifact }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact: grok-macos-aarch64
+            bin_name: grok
+          - os: macos-14
+            target: x86_64-apple-darwin
+            artifact: grok-macos-x86_64
+            bin_name: grok
+            rust_target: x86_64-apple-darwin
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            artifact: grok-linux-x86_64
+            bin_name: grok
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: grok-linux-aarch64
+            bin_name: grok
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: grok-windows-x86_64
+            bin_name: grok.exe
+
+    steps:
+      - name: Resolve source
+        id: src
+        run: |
+          REPO="${{ github.event.inputs.source_repo }}"
+          REF="${{ github.event.inputs.source_ref }}"
+          if [ -z "$REPO" ]; then REPO="xai-org/grok-build"; fi
+          if [ -z "$REF" ]; then REF="main"; fi
+          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Building $REPO@$REF for ${{ matrix.target }} on ${{ matrix.os }}"
+
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.src.outputs.repo }}
+          ref: ${{ steps.src.outputs.ref }}
+          path: src
+
+      - name: Install Rust (respect rust-toolchain.toml)
+        working-directory: src
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            curl -sSf https://win.rustup.rs/x86_64 -o rustup-init.exe
+            ./rustup-init.exe -y --profile minimal --default-toolchain none
+            echo "$USERPROFILE/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$USERPROFILE/.cargo/bin:$PATH"
+          else
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup show
+          rustc --version
+          cargo --version
+
+      - name: Add cross-compile target (macOS Intel)
+        if: matrix.rust_target != ''
+        working-directory: src
+        run: rustup target add ${{ matrix.rust_target }}
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          shared-key: ${{ matrix.artifact }}
+          cache-on-failure: true
+
+      - name: Install DotSlash (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cargo install dotslash --locked
+          command -v dotslash
+          /usr/bin/env dotslash --help >/dev/null
+
+      - name: Install protoc (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install protoc -y
+          protoc --version
+          # Prefer system protoc over missing Windows DotSlash platform entry
+          echo "PROTOC=$(command -v protoc)" >> "$GITHUB_ENV"
+
+      - name: Verify protoc (Unix via bin/protoc + DotSlash)
+        if: runner.os != 'Windows'
+        working-directory: src
+        run: |
+          # Host protoc is enough for codegen even when cross-compiling the Rust target.
+          ./bin/protoc --version
+
+      - name: Build release binary
+        working-directory: src
+        env:
+          CARGO_TERM_COLOR: always
+        run: |
+          EXTRA=()
+          if [ -n "${{ matrix.rust_target }}" ]; then
+            EXTRA+=(--target "${{ matrix.rust_target }}")
+          fi
+          cargo build -p xai-grok-pager-bin --release "${EXTRA[@]}"
+
+      - name: Package artifact
+        working-directory: src
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          if [ -n "${{ matrix.rust_target }}" ]; then
+            SRC_BIN="target/${{ matrix.rust_target }}/release/xai-grok-pager"
+            if [ ! -f "$SRC_BIN" ] && [ -f "${SRC_BIN}.exe" ]; then
+              SRC_BIN="${SRC_BIN}.exe"
+            fi
+          else
+            if [ -f target/release/xai-grok-pager.exe ]; then
+              SRC_BIN="target/release/xai-grok-pager.exe"
+            else
+              SRC_BIN="target/release/xai-grok-pager"
+            fi
+          fi
+          DEST="dist/${{ matrix.bin_name }}"
+          cp "$SRC_BIN" "$DEST"
+          if [[ "${{ runner.os }}" != "Windows" ]]; then
+            chmod +x "$DEST"
+          fi
+          file "$DEST" || true
+          # Version may need network/auth; do not fail packaging.
+          "./$DEST" --version || true
+          ls -lh "$DEST"
+          {
+            echo "source_repo=${{ steps.src.outputs.repo }}"
+            echo "source_ref=${{ steps.src.outputs.ref }}"
+            echo "source_sha=$(git rev-parse HEAD)"
+            echo "target=${{ matrix.target }}"
+            echo "runner_os=${{ runner.os }}"
+            echo "runner_arch=${{ runner.arch }}"
+            echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > dist/BUILD_INFO.txt
+          cat dist/BUILD_INFO.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}-${{ github.run_id }}
+          path: |
+            src/dist/${{ matrix.bin_name }}
+            src/dist/BUILD_INFO.txt
+          if-no-files-found: error
+          retention-days: 14
