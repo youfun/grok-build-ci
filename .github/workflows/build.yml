@@ -213,7 +213,6 @@ jobs:
           for dir in artifacts/grok-*; do
             [ -d "$dir" ] || continue
             base="$(basename "$dir")"
-            # artifact dir: grok-macos-aarch64-<run_id>
             platform="${base%-${RUN_ID}}"
             if [ -f "$dir/grok.exe" ]; then
               out="release/${platform}.exe"
@@ -238,29 +237,26 @@ jobs:
             exit 1
           fi
           ls -lah release
-
-          cat > RELEASE_NOTES.md << NOTES
-          Rolling build from CI run ${RUN_ID} (#${RUN_NUMBER})
-
-          - workflow: ${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}
-          - source: \`${SOURCE_REPO}\` @ \`${SOURCE_REF}\`
-          - published assets: ${count}
-
-          Install:
-
-          \`\`\`bash
-          curl -fsSL https://raw.githubusercontent.com/${REPOSITORY}/main/install.sh | bash
-          \`\`\`
-
-          \`\`\`powershell
-          irm https://raw.githubusercontent.com/${REPOSITORY}/main/install.ps1 | iex
-          \`\`\`
-          NOTES
-          # strip the accidental leading spaces from heredoc body
-          sed -i 's/^          //' RELEASE_NOTES.md
+          {
+            echo "Rolling build from CI run ${RUN_ID} (#${RUN_NUMBER})"
+            echo
+            echo "- workflow: ${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
+            echo "- source: \`${SOURCE_REPO}\` @ \`${SOURCE_REF}\`"
+            echo "- published assets: ${count}"
+            echo
+            echo "Install:"
+            echo
+            echo '```bash'
+            echo "curl -fsSL https://raw.githubusercontent.com/${REPOSITORY}/main/install.sh | bash"
+            echo '```'
+            echo
+            echo '```powershell'
+            echo "irm https://raw.githubusercontent.com/${REPOSITORY}/main/install.ps1 | iex"
+            echo '```'
+          } > RELEASE_NOTES.md
           cat RELEASE_NOTES.md
 
-      - name: Publish GitHub release (tag: latest)
+      - name: Publish GitHub release tag latest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
