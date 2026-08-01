@@ -157,12 +157,15 @@ jobs:
         env:
           CARGO_TERM_COLOR: always
         run: |
-          set -euo pipefail
-          EXTRA=()
+          set -eo pipefail
+          # Note: do not use `set -u` with empty "${EXTRA[@]}" — on macOS bash
+          # that expands to an unbound variable and aborts before cargo runs
+          # (seen on grok-macos-aarch64 where matrix.rust_target is unset).
           if [ -n "${{ matrix.rust_target }}" ]; then
-            EXTRA+=(--target "${{ matrix.rust_target }}")
+            cargo build -p xai-grok-pager-bin --release --target "${{ matrix.rust_target }}"
+          else
+            cargo build -p xai-grok-pager-bin --release
           fi
-          cargo build -p xai-grok-pager-bin --release "${EXTRA[@]}"
 
       - name: Package artifact
         working-directory: src
