@@ -115,21 +115,49 @@ jobs:
 
       - name: Install protoc (Windows)
         if: runner.os == 'Windows'
+        shell: pwsh
         run: |
           choco install protoc -y
-          protoc --version
-          echo "PROTOC=$(command -v protoc)" >> "$GITHUB_ENV"
+          $protoc = (Get-Command protoc).Source
+          & $protoc --version
+          # Native Windows path for build scripts (avoid Git-Bash /c/... form)
+          Add-Content -Path $env:GITHUB_ENV -Value "PROTOC=$protoc"
+          Write-Host "PROTOC=$protoc"
 
       - name: Verify protoc (Unix via bin/protoc + DotSlash)
         if: runner.os != 'Windows'
         working-directory: src
         run: ./bin/protoc --version
 
-      - name: Build release binary
+      # Windows uses pwsh so MSVC link flags like /DEBUG:NONE are not mangled by
+      # MSYS path conversion (Git Bash turns /DEBUG:NONE into a filesystem path).
+      - name: Build release binary (Windows)
+        if: runner.os == 'Windows'
+        working-directory: src
+        shell: pwsh
+        env:
+          CARGO_TERM_COLOR: always
+          # Large binary: link.exe LNK1318 PDB LIMIT without these.
+          # RUSTFLAGS replaces target rustflags from .cargo/config.toml — restate them.
+          CARGO_PROFILE_RELEASE_DEBUG: "0"
+          RUSTFLAGS: "-C force-unwind-tables=yes -C target-feature=+crt-static -C debuginfo=0 -C link-arg=/DEBUG:NONE"
+        run: |
+          Write-Host "Windows link workaround: debuginfo=0 + /DEBUG:NONE (avoid LNK1318)"
+          Write-Host "RUSTFLAGS=$env:RUSTFLAGS"
+          Write-Host "PROTOC=$env:PROTOC"
+          cargo build -p xai-grok-pager-bin --release
+          if (-not (Test-Path "target/release/xai-grok-pager.exe")) {
+            throw "missing target/release/xai-grok-pager.exe"
+          }
+          Get-Item "target/release/xai-grok-pager.exe" | Format-List FullName, Length, LastWriteTime
+
+      - name: Build release binary (Unix)
+        if: runner.os != 'Windows'
         working-directory: src
         env:
           CARGO_TERM_COLOR: always
         run: |
+          set -euo pipefail
           EXTRA=()
           if [ -n "${{ matrix.rust_target }}" ]; then
             EXTRA+=(--target "${{ matrix.rust_target }}")

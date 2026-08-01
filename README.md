@@ -47,6 +47,29 @@ Scripts always pull the rolling **`latest`** release assets (overwrite existing 
 | `grok-linux-aarch64` | Linux | ARM64 |
 | `grok-windows-x86_64.exe` | Windows | x86_64 |
 
+### Windows build notes
+
+The release binary is large. On MSVC, default `/DEBUG` PDB generation can fail with:
+
+`LINK : fatal error LNK1318: Unexpected PDB error: LIMIT (12)`
+
+CI builds Windows with **PowerShell** (not Git Bash) so `/DEBUG:NONE` is not
+corrupted by MSYS path conversion, and sets:
+
+- `CARGO_PROFILE_RELEASE_DEBUG=0`
+- `RUSTFLAGS=-C force-unwind-tables=yes -C target-feature=+crt-static -C debuginfo=0 -C link-arg=/DEBUG:NONE`
+
+(`RUSTFLAGS` replaces target rustflags from upstream `.cargo/config.toml`, so
+`crt-static` / unwind tables are restated explicitly.)
+
+Local equivalent (PowerShell):
+
+```powershell
+$env:CARGO_PROFILE_RELEASE_DEBUG = "0"
+$env:RUSTFLAGS = "-C force-unwind-tables=yes -C target-feature=+crt-static -C debuginfo=0 -C link-arg=/DEBUG:NONE"
+cargo build -p xai-grok-pager-bin --release
+```
+
 ## CI triggers
 
 - **Manual**: Actions → Build all platforms → Run workflow
