@@ -185,8 +185,8 @@ jobs:
   publish:
     name: Publish rolling release
     needs: build
-    # Do not publish a partial release: installers require every platform asset.
-    if: ${{ needs.build.result == 'success' && github.ref == 'refs/heads/main' }}
+    # Publish every successful matrix artifact. A failed platform must not block the others.
+    if: ${{ always() && !cancelled() && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     steps:
       - name: Download build artifacts
@@ -244,12 +244,18 @@ jobs:
             "grok-linux-aarch64"
             "grok-windows-x86_64.exe"
           )
+          missing=()
           for asset in "${required[@]}"; do
             if [ ! -s "release/$asset" ]; then
-              echo "Missing required release asset: $asset" >&2
-              exit 1
+              missing+=("$asset")
             fi
           done
+
+          release_status="complete"
+          if [ "${#missing[@]}" -gt 0 ]; then
+            release_status="partial"
+            echo "Partial build; existing release assets will be retained. Missing: ${missing[*]}"
+          fi
 
           ls -lah release
           {
@@ -257,7 +263,12 @@ jobs:
             echo
             echo "- workflow: ${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
             echo "- source: \`${SOURCE_REPO}\` @ \`${SOURCE_REF}\`"
-            echo "- published assets: ${count}"
+            echo "- release status: ${release_status}"
+            echo "- assets uploaded by this run: ${count}"
+            if [ "${#missing[@]}" -gt 0 ]; then
+              echo "- assets missing from this run: ${missing[*]}"
+              echo "- previously published assets are retained"
+            fi
             echo
             echo "Install:"
             echo
@@ -277,11 +288,19 @@ jobs:
         run: |
           set -euo pipefail
           TAG=latest
+          TITLE="Latest CI build #${{ github.run_number }}"
           if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release delete "$TAG" --repo "${{ github.repository }}" --yes --cleanup-tag
+            # Upload successful platform assets without deleting assets from
+            # earlier successful matrix runs.
+            gh release upload "$TAG" --repo "${{ github.repository }}" --clobber release/*
+            gh release edit "$TAG" \
+              --repo "${{ github.repository }}" \
+              --title "$TITLE" \
+              --notes-file RELEASE_NOTES.md
+          else
+            gh release create "$TAG" \
+              --repo "${{ github.repository }}" \
+              --title "$TITLE" \
+              --notes-file RELEASE_NOTES.md \
+              release/*
           fi
-          gh release create "$TAG" \
-            --repo "${{ github.repository }}" \
-            --title "Latest CI build #${{ github.run_number }}" \
-            --notes-file RELEASE_NOTES.md \
-            release/*

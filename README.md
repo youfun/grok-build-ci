@@ -62,4 +62,4 @@ Scripts always pull the rolling **`latest`** release assets (overwrite existing 
 
 ## Releases
 
-Successful main-branch builds publish/replace GitHub release tag **`latest`** with all required platform binaries for the install scripts. If any matrix build fails, the publish job is skipped so an incomplete release cannot replace `latest`.
+Each successful main-branch matrix build publishes its platform asset to GitHub release tag **`latest`**. If a platform build fails, other successful assets are still published and existing assets are retained; the release notes identify the release as partial until all required platform binaries are available.
