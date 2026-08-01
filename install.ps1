@@ -55,10 +55,18 @@ try {
     } catch {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     }
-    Invoke-WebRequest -Uri $Url -OutFile $tmp -UseBasicParsing
+    try {
+        Invoke-WebRequest -Uri $Url -OutFile $tmp -UseBasicParsing
+    } catch {
+        $detail = $_.Exception.Message
+        if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
+            $detail = "HTTP $([int]$_.Exception.Response.StatusCode) $($_.Exception.Response.StatusDescription)"
+        }
+        throw "Download failed ($detail). Missing or unavailable release asset: $Url`nCheck release assets: https://github.com/$Repo/releases"
+    }
 
     if (-not (Test-Path $tmp) -or ((Get-Item $tmp).Length -lt 1024)) {
-        throw "Download failed or file too small. Check release assets: https://github.com/$Repo/releases"
+        throw "Download failed or file too small: $Url`nCheck release assets: https://github.com/$Repo/releases"
     }
 
     Copy-Item -Force -Path $tmp -Destination $Dest

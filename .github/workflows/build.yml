@@ -185,8 +185,8 @@ jobs:
   publish:
     name: Publish rolling release
     needs: build
-    # Publish whatever platforms succeeded (matrix may partially fail).
-    if: ${{ always() && !cancelled() && github.ref == 'refs/heads/main' }}
+    # Do not publish a partial release: installers require every platform asset.
+    if: ${{ needs.build.result == 'success' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     steps:
       - name: Download build artifacts
@@ -236,6 +236,21 @@ jobs:
             echo "No binaries to publish"
             exit 1
           fi
+
+          required=(
+            "grok-macos-aarch64"
+            "grok-macos-x86_64"
+            "grok-linux-x86_64"
+            "grok-linux-aarch64"
+            "grok-windows-x86_64.exe"
+          )
+          for asset in "${required[@]}"; do
+            if [ ! -s "release/$asset" ]; then
+              echo "Missing required release asset: $asset" >&2
+              exit 1
+            fi
+          done
+
           ls -lah release
           {
             echo "Rolling build from CI run ${RUN_ID} (#${RUN_NUMBER})"
