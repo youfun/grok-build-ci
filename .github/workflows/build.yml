@@ -70,12 +70,33 @@ jobs:
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
           echo "Building $REPO@$REF for ${{ matrix.target }} on ${{ matrix.os }}"
 
+      # CI helpers (Windows source patches). Must stay available next to src/.
+      - name: Checkout CI repo
+        uses: actions/checkout@v4
+        with:
+          path: ci
+
       - name: Checkout source
         uses: actions/checkout@v4
         with:
           repository: ${{ steps.src.outputs.repo }}
           ref: ${{ steps.src.outputs.ref }}
           path: src
+
+      # Upstream xai-proto-build still passes --dependency_out=/dev/stdout to protoc,
+      # which does not exist on native Windows and fails build scripts with:
+      #   /dev/stdout: No such file or directory
+      # Local Windows builds use the same temp-file workaround (see patches/).
+      - name: Apply Windows source patches
+        if: runner.os == 'Windows'
+        working-directory: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch="../ci/patches/xai-proto-build-windows.patch"
+          test -f "$patch"
+          git apply --verbose "$patch"
+          grep -n 'cfg(windows)' crates/build/xai-proto-build/src/lib.rs | head -5
 
       - name: Install Rust (respect rust-toolchain.toml)
         working-directory: src
@@ -118,9 +139,16 @@ jobs:
         shell: pwsh
         run: |
           choco install protoc -y
-          $protoc = (Get-Command protoc).Source
+          # Prefer the real tools binary over the Chocolatey shim so
+          # xai-proto-build can resolve ../include for well-known types.
+          $candidates = @(
+            "C:\ProgramData\chocolatey\lib\protoc\tools\bin\protoc.exe",
+            "C:\ProgramData\Chocolatey\lib\protoc\tools\bin\protoc.exe",
+            (Get-Command protoc).Source
+          )
+          $protoc = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+          if (-not $protoc) { throw "protoc.exe not found after choco install" }
           & $protoc --version
-          # Native Windows path for build scripts (avoid Git-Bash /c/... form)
           Add-Content -Path $env:GITHUB_ENV -Value "PROTOC=$protoc"
           Write-Host "PROTOC=$protoc"
 

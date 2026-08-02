@@ -37,6 +37,11 @@ irm https://raw.githubusercontent.com/youfun/grok-build-ci/main/install.ps1 | ie
 
 Scripts always pull the rolling **`latest`** release assets (overwrite existing binary = update).
 
+## Security
+
+- **Audit report**: [`SECURITY_AUDIT.md`](SECURITY_AUDIT.md) — incremental review of upstream `xai-org/grok-build` (export_github, permissions, uploads).
+- **Agent-side guard plugin**: [`plugins/secret-guard/`](plugins/secret-guard/) — `PreToolUse` hooks that block agent `git push` / origin rewrite and writes to common secret paths. Install with `grok plugin install ./plugins/secret-guard --trust` (see the plugin README). Does **not** intercept `workspace.export_github` RPC.
+
 ## Platforms
 
 | Release asset | OS | Arch |
@@ -49,20 +54,24 @@ Scripts always pull the rolling **`latest`** release assets (overwrite existing 
 
 ### Windows build notes
 
-The release binary is large. On MSVC, default `/DEBUG` PDB generation can fail with:
+Two upstream Windows gaps are handled in CI:
 
-`LINK : fatal error LNK1318: Unexpected PDB error: LIMIT (12)`
+1. **protoc `/dev/stdout`** — `xai-proto-build` passes `--dependency_out=/dev/stdout`,
+   which fails on native Windows (`No such file or directory`). CI applies
+   [`patches/xai-proto-build-windows.patch`](patches/xai-proto-build-windows.patch)
+   after checkout (temp files instead of Unix pseudo-paths).
 
-CI builds Windows with **PowerShell** (not Git Bash) so `/DEBUG:NONE` is not
-corrupted by MSYS path conversion, and sets:
+2. **MSVC PDB limit (LNK1318)** — the release binary is large enough that default
+   `/DEBUG` PDB generation fails. CI builds with **PowerShell** (not Git Bash, so
+   `/DEBUG:NONE` is not mangled by MSYS path conversion) and:
 
-- `CARGO_PROFILE_RELEASE_DEBUG=0`
-- `RUSTFLAGS=-C force-unwind-tables=yes -C target-feature=+crt-static -C debuginfo=0 -C link-arg=/DEBUG:NONE`
+   - `CARGO_PROFILE_RELEASE_DEBUG=0`
+   - `RUSTFLAGS=-C force-unwind-tables=yes -C target-feature=+crt-static -C debuginfo=0 -C link-arg=/DEBUG:NONE`
 
-(`RUSTFLAGS` replaces target rustflags from upstream `.cargo/config.toml`, so
-`crt-static` / unwind tables are restated explicitly.)
+   (`RUSTFLAGS` replaces target rustflags from upstream `.cargo/config.toml`, so
+   `crt-static` / unwind tables are restated explicitly.)
 
-Local equivalent (PowerShell):
+Local equivalent (PowerShell), after applying the same protoc patch to the source tree:
 
 ```powershell
 $env:CARGO_PROFILE_RELEASE_DEBUG = "0"
